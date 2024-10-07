@@ -16,8 +16,8 @@
 $ErrorActionPreference = 'Stop'
 
 function Enable-Privilege {
-    param($Privilege)
-    $Definition = @'
+  param($Privilege)
+  $Definition = @'
   using System;
   using System.Runtime.InteropServices;
   public class AdjPriv {
@@ -55,27 +55,27 @@ function Enable-Privilege {
     }
   }
 '@
-    $ProcessHandle = (Get-Process -id $pid).Handle
-    $type = Add-Type $definition -PassThru
-    $type[0]::EnablePrivilege($processHandle, $Privilege)
+  $ProcessHandle = (Get-Process -id $pid).Handle
+  $type = Add-Type $definition -PassThru
+  $type[0]::EnablePrivilege($processHandle, $Privilege)
 }
 
 function Aquire-Privilege {
   param($Privilege)
 
   write-output "Acquiring the $Privilege privilege"
-  $enablePrivilegeResponse=$false
-  for($i = 0; $i -lt 10; $i++) {
-      write-output "Retry $i : Trying to enable the $Privilege privilege"
-      $enablePrivilegeResponse = Enable-Privilege -Privilege "$Privilege" -ErrorAction 'Continue'
-      if ($enablePrivilegeResponse) {
-          break
-      }
-      Start-Sleep 1
+  $enablePrivilegeResponse = $false
+  for ($i = 0; $i -lt 10; $i++) {
+    write-output "Retry $i : Trying to enable the $Privilege privilege"
+    $enablePrivilegeResponse = Enable-Privilege -Privilege "$Privilege" -ErrorAction 'Continue'
+    if ($enablePrivilegeResponse) {
+      break
+    }
+    Start-Sleep 1
   }
-  if(!$enablePrivilegeResponse) {
-      write-output "Failed to enable the $Privilege privilege."
-      exit 1
+  if (!$enablePrivilegeResponse) {
+    write-output "Failed to enable the $Privilege privilege."
+    exit 1
   }
 }
 
@@ -85,46 +85,57 @@ Aquire-Privilege -Privilege "SeTakeOwnershipPrivilege"
 # Set the registry permissions.
 write-output "Setting GMSA plugin registry permissions"
 try {
-    $ccgKeyPath = "System\CurrentControlSet\Control\CCG\COMClasses"
-    $owner = [System.Security.Principal.NTAccount]"BUILTIN\Administrators"
+  $ccgKeyPath = "System\CurrentControlSet\Control\CCG\COMClasses"
+  $owner = [System.Security.Principal.NTAccount]"BUILTIN\Administrators"
 
-    $key = [Microsoft.Win32.Registry]::LocalMachine.OpenSubKey(
-        $ccgKeyPath,
-        [Microsoft.Win32.RegistryKeyPermissionCheck]::ReadWriteSubTree,
-        [System.Security.AccessControl.RegistryRights]::TakeOwnership)
-    $acl = $key.GetAccessControl()
-    $originalOwner = $acl.owner
-    $acl.SetOwner($owner)
-    $key.SetAccessControl($acl)
+  $key = [Microsoft.Win32.Registry]::LocalMachine.OpenSubKey(
+    $ccgKeyPath,
+    [Microsoft.Win32.RegistryKeyPermissionCheck]::ReadWriteSubTree,
+    [System.Security.AccessControl.RegistryRights]::TakeOwnership)
+  $acl = $key.GetAccessControl()
+  $originalOwner = $acl.owner
+  $acl.SetOwner($owner)
+  $key.SetAccessControl($acl)
     
-    $key = [Microsoft.Win32.Registry]::LocalMachine.OpenSubKey(
-        $ccgKeyPath,
-        [Microsoft.Win32.RegistryKeyPermissionCheck]::ReadWriteSubTree,
-        [System.Security.AccessControl.RegistryRights]::ChangePermissions)
-    $acl = $key.GetAccessControl()
-    $rule = New-Object System.Security.AccessControl.RegistryAccessRule(
-        $owner,
-        [System.Security.AccessControl.RegistryRights]::FullControl,
-        [System.Security.AccessControl.AccessControlType]::Allow)
-    $acl.SetAccessRule($rule)
-    $key.SetAccessControl($acl)
-} catch {
-    write-output "Failed to set GMSA plugin registry permissions. $_"
-    exit 1
+  $key = [Microsoft.Win32.Registry]::LocalMachine.OpenSubKey(
+    $ccgKeyPath,
+    [Microsoft.Win32.RegistryKeyPermissionCheck]::ReadWriteSubTree,
+    [System.Security.AccessControl.RegistryRights]::ChangePermissions)
+  $acl = $key.GetAccessControl()
+  $rule = New-Object System.Security.AccessControl.RegistryAccessRule(
+    $owner,
+    [System.Security.AccessControl.RegistryRights]::FullControl,
+    [System.Security.AccessControl.AccessControlType]::Allow)
+  $acl.SetAccessRule($rule)
+  $key.SetAccessControl($acl)
+}
+catch {
+  write-output "Failed to set GMSA plugin registry permissions. $_"
+  exit 1
+}
+
+# Check if the registerplugin.reg file exists
+$pluginPath = "$PSScriptRoot\registerplugin.reg"
+if (-not (Test-Path "$pluginPath")) {
+  write-output "Couldn't find the $pluginPath file"
+  exit 1
 }
 
 # Set the appropriate registry values.
 try {
-    write-output "Setting the appropriate GMSA plugin registry values"
-    reg.exe import "registerplugin.reg"
-} catch {
-    write-output "Failed to set GMSA plugin registry values. $_"
+  Write-Output "Setting the appropriate GMSA plugin registry values"
+  reg.exe import "$pluginPath" 2>&1 | Out-Null
+
+  if ($LASTEXITCODE -ne 0) {
+    Write-Output "Failed to set GMSA plugin registry values $($Error[0].Exception.Message)"
     exit 1
+  }
 }
+catch {}
 
 write-output "Restore original access to registry key"
 $acl = $key.GetAccessControl()
-$acl.RemoveAccessRule($rule)
+$acl.RemoveAccessRule($rule) | Out-Null
 $acl.SetOwner([System.Security.Principal.NTAccount]$originalowner)
 Aquire-Privilege -Privilege "SeRestorePrivilege"
 $key.SetAccessControl($acl)
